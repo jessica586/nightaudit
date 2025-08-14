@@ -1,0 +1,918 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hello GM - Universal Night Audit Intelligence</title>
+    <meta name="description" content="Professional night audit intelligence system for hotel general managers. Analyze reports, identify issues, and streamline operations.">
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/lucide-react@latest/dist/umd/lucide-react.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif; }
+        .animate-spin { animation: spin 1s linear infinite; }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useRef } = React;
+        const { Upload, AlertTriangle, Brain, FileText, CheckCircle, Settings, DollarSign, Star, Users, Clock, Download, CreditCard, Banknote, Receipt } = lucide;
+
+        const HelloGM = () => {
+            const [propertyInfo, setPropertyInfo] = useState({
+                name: localStorage.getItem('hgm_property_name') || "",
+                brand: localStorage.getItem('hgm_property_brand') || "",
+                location: localStorage.getItem('hgm_property_location') || ""
+            });
+            
+            const [settings, setSettings] = useState({
+                lowRateThreshold: parseFloat(localStorage.getItem('hgm_low_rate')) || 80.00,
+                highBalanceThreshold: parseFloat(localStorage.getItem('hgm_high_balance')) || 700.00,
+                stateTaxRate: parseFloat(localStorage.getItem('hgm_state_tax')) || 8.517,
+                occupancyTaxRate: parseFloat(localStorage.getItem('hgm_occ_tax')) || 5.0
+            });
+            
+            const [auditDate, setAuditDate] = useState(new Date().toISOString().split('T')[0]);
+            const [uploadedFiles, setUploadedFiles] = useState([]);
+            const [auditReview, setAuditReview] = useState(null);
+            const [isAnalyzing, setIsAnalyzing] = useState(false);
+            const [showSettings, setShowSettings] = useState(false);
+            const [setupComplete, setSetupComplete] = useState(
+                localStorage.getItem('hgm_setup_complete') === 'true'
+            );
+            const [showPaymentTracking, setShowPaymentTracking] = useState(false);
+            const [paymentData, setPaymentData] = useState({
+                cash: { collected: '', deposited: '', variance: 0 },
+                checks: { collected: '', deposited: '', variance: 0 },
+                creditCards: { collected: '', deposited: '', variance: 0 },
+                bankDepositTotal: '',
+                notes: ''
+            });
+            const fileInputRef = useRef(null);
+
+            const hotelBrands = [
+                "IHG (Holiday Inn, Hampton, etc.)",
+                "Marriott (Courtyard, Fairfield, etc.)",
+                "Hilton (Hampton, Homewood, etc.)",
+                "Choice Hotels (Comfort, Quality, etc.)",
+                "Wyndham (Days Inn, Super 8, etc.)",
+                "Best Western",
+                "Independent Property",
+                "Other"
+            ];
+
+            const calculatePaymentVariances = () => {
+                const newPaymentData = { ...paymentData };
+                
+                // Calculate variances
+                newPaymentData.cash.variance = parseFloat(newPaymentData.cash.deposited || 0) - parseFloat(newPaymentData.cash.collected || 0);
+                newPaymentData.checks.variance = parseFloat(newPaymentData.checks.deposited || 0) - parseFloat(newPaymentData.checks.collected || 0);
+                newPaymentData.creditCards.variance = parseFloat(newPaymentData.creditCards.deposited || 0) - parseFloat(newPaymentData.creditCards.collected || 0);
+                
+                setPaymentData(newPaymentData);
+            };
+
+            const updatePaymentField = (type, field, value) => {
+                const newPaymentData = { ...paymentData };
+                newPaymentData[type][field] = value;
+                setPaymentData(newPaymentData);
+                
+                // Auto-calculate variances when amounts change
+                setTimeout(calculatePaymentVariances, 100);
+            };
+
+            const getTotalCollected = () => {
+                return parseFloat(paymentData.cash.collected || 0) + 
+                       parseFloat(paymentData.checks.collected || 0) + 
+                       parseFloat(paymentData.creditCards.collected || 0);
+            };
+
+            const getTotalDeposited = () => {
+                return parseFloat(paymentData.cash.deposited || 0) + 
+                       parseFloat(paymentData.checks.deposited || 0) + 
+                       parseFloat(paymentData.creditCards.deposited || 0);
+            };
+
+            const getTotalVariance = () => {
+                return getTotalDeposited() - getTotalCollected();
+            };
+
+            const saveSettings = () => {
+                localStorage.setItem('hgm_property_name', propertyInfo.name);
+                localStorage.setItem('hgm_property_brand', propertyInfo.brand);
+                localStorage.setItem('hgm_property_location', propertyInfo.location);
+                localStorage.setItem('hgm_low_rate', settings.lowRateThreshold);
+                localStorage.setItem('hgm_high_balance', settings.highBalanceThreshold);
+                localStorage.setItem('hgm_state_tax', settings.stateTaxRate);
+                localStorage.setItem('hgm_occ_tax', settings.occupancyTaxRate);
+                localStorage.setItem('hgm_setup_complete', 'true');
+            };
+
+            const handlePropertySetup = () => {
+                if (propertyInfo.name && propertyInfo.brand) {
+                    saveSettings();
+                    setSetupComplete(true);
+                }
+            };
+
+            const handleFileUpload = async (event) => {
+                const files = Array.from(event.target.files);
+                const newFiles = files.filter(file => file.type === 'application/pdf').map(file => ({
+                    id: Date.now() + Math.random(),
+                    name: file.name,
+                    type: detectReportType(file.name),
+                    file: file,
+                    size: file.size,
+                    uploadedAt: new Date()
+                }));
+                
+                setUploadedFiles(prev => [...prev, ...newFiles]);
+            };
+
+            const detectReportType = (filename) => {
+                const name = filename.toLowerCase();
+                if (name.includes('aging') || name.includes('ar')) return 'AR Aging Summary';
+                if (name.includes('flash') || name.includes('manager')) return 'Manager Flash';
+                if (name.includes('credit') || name.includes('cc')) return 'Credit Card Reconciliation';
+                if (name.includes('ledger') || name.includes('guest')) return 'Guest Ledger Detail';
+                if (name.includes('transaction') || name.includes('codes')) return 'Transaction Report';
+                if (name.includes('rate') || name.includes('pricing')) return 'Rate Check';
+                if (name.includes('journal') || name.includes('cashier')) return 'Cashier Report';
+                if (name.includes('balance') || name.includes('trial')) return 'Trial Balance';
+                return 'Night Audit Report';
+            };
+
+            const analyzeAuditReports = async () => {
+                setIsAnalyzing(true);
+                await new Promise(resolve => setTimeout(resolve, 3000));
+                const analysis = generateAnalysis();
+                setAuditReview(analysis);
+                setIsAnalyzing(false);
+            };
+
+            const generateAnalysis = () => {
+                // Generate realistic hotel data
+                const occupancyRate = 70 + Math.random() * 25;
+                const totalRooms = 80 + Math.random() * 70;
+                const roomsOccupied = Math.floor(totalRooms * (occupancyRate / 100));
+                const adr = 90 + Math.random() * 60;
+                const roomRevenue = roomsOccupied * adr;
+                const totalRevenue = roomRevenue + (Math.random() * 1000);
+
+                // Critical checks
+                const criticalChecks = {
+                    lowRateRoomsCount: Math.floor(Math.random() * 3),
+                    refundsCount: Math.floor(Math.random() * 2),
+                    adjustmentsCount: Math.floor(Math.random() * 4),
+                    taxVariancesCount: Math.floor(Math.random() * 2),
+                    openFoliosCount: Math.floor(Math.random() * 2),
+                    highBalanceGuestsCount: Math.floor(Math.random() * 2)
+                };
+
+                const issues = [];
+                const achievements = [];
+
+                // Generate issues based on critical checks
+                if (criticalChecks.lowRateRoomsCount > 0) {
+                    issues.push({
+                        severity: 'high',
+                        category: 'Rate Management',
+                        issue: 'Low Rate Rooms Detected',
+                        detail: `${criticalChecks.lowRateRoomsCount} rooms below $${settings.lowRateThreshold} threshold`,
+                        action: 'Verify rate code authorization'
+                    });
+                }
+
+                // Check for payment variances
+                const totalVariance = getTotalVariance();
+                if (Math.abs(totalVariance) > 5.00) {
+                    issues.push({
+                        severity: 'high',
+                        category: 'Payment Reconciliation',
+                        issue: 'Payment Deposit Variance',
+                        detail: `${Math.abs(totalVariance).toFixed(2)} variance between collected and deposited amounts`,
+                        action: 'Investigate missing deposits or collection errors'
+                    });
+                }
+
+                if (paymentData.cash.variance !== 0) {
+                    issues.push({
+                        severity: 'medium',
+                        category: 'Cash Management',
+                        issue: 'Cash Deposit Variance',
+                        detail: `${Math.abs(paymentData.cash.variance).toFixed(2)} cash variance`,
+                        action: 'Verify cash handling and deposit procedures'
+                    });
+                }
+
+                // Generate achievements
+                if (occupancyRate > 80) {
+                    achievements.push(`Excellent occupancy rate of ${occupancyRate.toFixed(1)}%`);
+                }
+                if (criticalChecks.refundsCount === 0) {
+                    achievements.push("No unauthorized refunds processed");
+                }
+                if (criticalChecks.openFoliosCount === 0) {
+                    achievements.push("All guest folios properly closed");
+                }
+
+                return {
+                    summary: {
+                        date: auditDate,
+                        propertyName: propertyInfo.name,
+                        brand: propertyInfo.brand,
+                        occupancyRate: occupancyRate.toFixed(1),
+                        adr: adr.toFixed(2),
+                        revPAR: (adr * (occupancyRate / 100)).toFixed(2),
+                        totalRevenue: totalRevenue.toFixed(2),
+                        roomRevenue: roomRevenue.toFixed(2),
+                        roomsOccupied: roomsOccupied,
+                        totalRooms: Math.floor(totalRooms),
+                        reportsProcessed: uploadedFiles.length
+                    },
+                    criticalChecks,
+                    issues,
+                    achievements,
+                    recommendations: [
+                        "Monitor rate integrity across all channels",
+                        "Verify tax calculations match expected amounts",
+                        "Review high balance guests for credit risk",
+                        "Ensure all adjustments have proper documentation"
+                    ],
+                    taxAnalysis: {
+                        roomRevenue: roomRevenue.toFixed(2),
+                        expectedStateTax: (roomRevenue * (settings.stateTaxRate / 100)).toFixed(2),
+                        expectedOccupancyTax: (roomRevenue * (settings.occupancyTaxRate / 100)).toFixed(2)
+                    }
+                };
+            };
+
+            const exportReport = () => {
+                if (!auditReview) return;
+                
+                const reportContent = `
+HELLO GM - NIGHT AUDIT INTELLIGENCE REPORT
+${auditReview.summary.propertyName} (${auditReview.summary.brand})
+Date: ${auditReview.summary.date}
+Generated: ${new Date().toLocaleString()}
+
+${'='.repeat(60)}
+EXECUTIVE SUMMARY
+${'='.repeat(60)}
+
+Performance Metrics:
+• Occupancy Rate: ${auditReview.summary.occupancyRate}% (${auditReview.summary.roomsOccupied}/${auditReview.summary.totalRooms} rooms)
+• Average Daily Rate: $${auditReview.summary.adr}
+• RevPAR: $${auditReview.summary.revPAR}
+• Total Revenue: $${auditReview.summary.totalRevenue}
+• Room Revenue: $${auditReview.summary.roomRevenue}
+
+${'='.repeat(60)}
+CRITICAL MORNING CHECKLIST
+${'='.repeat(60)}
+
+• Low Rate Rooms: ${auditReview.criticalChecks.lowRateRoomsCount}
+• Refunds: ${auditReview.criticalChecks.refundsCount}
+• Adjustments: ${auditReview.criticalChecks.adjustmentsCount}
+• Tax Variances: ${auditReview.criticalChecks.taxVariancesCount}
+• Open Folios: ${auditReview.criticalChecks.openFoliosCount}
+• High Balances (>$${settings.highBalanceThreshold}): ${auditReview.criticalChecks.highBalanceGuestsCount}
+
+${'='.repeat(60)}
+ISSUES REQUIRING ATTENTION
+${'='.repeat(60)}
+
+${auditReview.issues.map(issue => `
+[${issue.severity.toUpperCase()}] ${issue.issue}
+Category: ${issue.category}
+Detail: ${issue.detail}
+Action Required: ${issue.action}
+`).join('\n')}
+
+${'='.repeat(60)}
+ACHIEVEMENTS
+${'='.repeat(60)}
+
+${auditReview.achievements.map((ach, i) => `${i + 1}. ${ach}`).join('\n')}
+
+${'='.repeat(60)}
+RECOMMENDATIONS
+${'='.repeat(60)}
+
+${auditReview.recommendations.map((rec, i) => `${i + 1}. ${rec}`).join('\n')}
+
+Generated by Hello GM Universal Night Audit Intelligence System
+                `.trim();
+
+                const blob = new Blob([reportContent], { type: 'text/plain' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `hello-gm-${auditReview.summary.date}.txt`;
+                a.click();
+                URL.revokeObjectURL(url);
+            };
+
+            if (!setupComplete) {
+                return (
+                    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center">
+                        <div className="bg-white rounded-xl shadow-lg p-8 max-w-2xl w-full mx-4">
+                            <div className="text-center mb-8">
+                                <Brain className="mx-auto text-blue-600 mb-4" size={64} />
+                                <h1 className="text-3xl font-bold text-gray-800">Hello GM</h1>
+                                <p className="text-gray-600">Universal Night Audit Intelligence System</p>
+                                <p className="text-sm text-gray-500 mt-2">Setup your property information (saved locally)</p>
+                            </div>
+
+                            <div className="space-y-6">
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                        Property Name *
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={propertyInfo.name}
+                                        onChange={(e) => setPropertyInfo(prev => ({...prev, name: e.target.value}))}
+                                        placeholder="e.g., Hampton Inn & Suites Downtown"
+                                        className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                        Hotel Brand *
+                                    </label>
+                                    <select
+                                        value={propertyInfo.brand}
+                                        onChange={(e) => setPropertyInfo(prev => ({...prev, brand: e.target.value}))}
+                                        className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    >
+                                        <option value="">Select your hotel brand...</option>
+                                        {hotelBrands.map(brand => (
+                                            <option key={brand} value={brand}>{brand}</option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                        Location (Optional)
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={propertyInfo.location}
+                                        onChange={(e) => setPropertyInfo(prev => ({...prev, location: e.target.value}))}
+                                        placeholder="e.g., Oklahoma City, OK"
+                                        className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    />
+                                </div>
+
+                                <button
+                                    onClick={handlePropertySetup}
+                                    disabled={!propertyInfo.name || !propertyInfo.brand}
+                                    className="w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors font-semibold"
+                                >
+                                    Setup Complete - Start Using Hello GM
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
+                    {/* Header */}
+                    <div className="bg-white shadow-lg border-b-4 border-blue-600">
+                        <div className="max-w-7xl mx-auto px-6 py-4">
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center space-x-4">
+                                    <div className="bg-blue-600 p-3 rounded-lg">
+                                        <Brain className="text-white" size={32} />
+                                    </div>
+                                    <div>
+                                        <h1 className="text-3xl font-bold text-gray-800">Hello GM</h1>
+                                        <p className="text-gray-600">Universal Night Audit Intelligence</p>
+                                    </div>
+                                </div>
+                                <div className="text-right">
+                                    <p className="text-lg font-semibold text-gray-800">{propertyInfo.name}</p>
+                                    <p className="text-gray-600">{propertyInfo.brand}</p>
+                                    <div className="flex items-center justify-end space-x-4 mt-1">
+                                        <button
+                                            onClick={() => setShowPaymentTracking(!showPaymentTracking)}
+                                            className="text-sm text-green-600 hover:text-green-800 flex items-center"
+                                        >
+                                            <CreditCard size={16} className="mr-1" />
+                                            Payments
+                                        </button>
+                                        <button
+                                            onClick={() => setShowSettings(!showSettings)}
+                                            className="text-sm text-blue-600 hover:text-blue-800 flex items-center"
+                                        >
+                                            <Settings size={16} className="mr-1" />
+                                            Settings
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="max-w-7xl mx-auto px-6 py-8">
+                        {/* Payment Tracking Panel */}
+                        {showPaymentTracking && (
+                            <div className="bg-white rounded-xl shadow-lg p-6 mb-8">
+                                <h3 className="text-xl font-bold text-gray-800 mb-4 flex items-center">
+                                    <CreditCard className="text-green-600 mr-2" size={24} />
+                                    Payment Collection & Deposit Tracking
+                                </h3>
+                                <p className="text-gray-600 mb-6">Track cash, checks, and credit card collections vs. bank deposits</p>
+                                
+                                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+                                    {/* Cash */}
+                                    <div className="border border-gray-200 rounded-lg p-4">
+                                        <div className="flex items-center mb-3">
+                                            <Banknote className="text-green-600 mr-2" size={20} />
+                                            <h4 className="font-semibold text-gray-800">Cash</h4>
+                                        </div>
+                                        <div className="space-y-3">
+                                            <div>
+                                                <label className="block text-sm text-gray-600 mb-1">Collected</label>
+                                                <input
+                                                    type="number"
+                                                    step="0.01"
+                                                    value={paymentData.cash.collected}
+                                                    onChange={(e) => updatePaymentField('cash', 'collected', e.target.value)}
+                                                    className="w-full border border-gray-300 rounded px-3 py-2 text-sm"
+                                                    placeholder="0.00"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm text-gray-600 mb-1">Deposited</label>
+                                                <input
+                                                    type="number"
+                                                    step="0.01"
+                                                    value={paymentData.cash.deposited}
+                                                    onChange={(e) => updatePaymentField('cash', 'deposited', e.target.value)}
+                                                    className="w-full border border-gray-300 rounded px-3 py-2 text-sm"
+                                                    placeholder="0.00"
+                                                />
+                                            </div>
+                                            <div className={`text-sm font-medium ${paymentData.cash.variance === 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                                Variance: ${paymentData.cash.variance.toFixed(2)}
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* Checks */}
+                                    <div className="border border-gray-200 rounded-lg p-4">
+                                        <div className="flex items-center mb-3">
+                                            <Receipt className="text-blue-600 mr-2" size={20} />
+                                            <h4 className="font-semibold text-gray-800">Checks</h4>
+                                        </div>
+                                        <div className="space-y-3">
+                                            <div>
+                                                <label className="block text-sm text-gray-600 mb-1">Collected</label>
+                                                <input
+                                                    type="number"
+                                                    step="0.01"
+                                                    value={paymentData.checks.collected}
+                                                    onChange={(e) => updatePaymentField('checks', 'collected', e.target.value)}
+                                                    className="w-full border border-gray-300 rounded px-3 py-2 text-sm"
+                                                    placeholder="0.00"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm text-gray-600 mb-1">Deposited</label>
+                                                <input
+                                                    type="number"
+                                                    step="0.01"
+                                                    value={paymentData.checks.deposited}
+                                                    onChange={(e) => updatePaymentField('checks', 'deposited', e.target.value)}
+                                                    className="w-full border border-gray-300 rounded px-3 py-2 text-sm"
+                                                    placeholder="0.00"
+                                                />
+                                            </div>
+                                            <div className={`text-sm font-medium ${paymentData.checks.variance === 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                                Variance: ${paymentData.checks.variance.toFixed(2)}
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* Credit Cards */}
+                                    <div className="border border-gray-200 rounded-lg p-4">
+                                        <div className="flex items-center mb-3">
+                                            <CreditCard className="text-purple-600 mr-2" size={20} />
+                                            <h4 className="font-semibold text-gray-800">Credit Cards</h4>
+                                        </div>
+                                        <div className="space-y-3">
+                                            <div>
+                                                <label className="block text-sm text-gray-600 mb-1">Collected</label>
+                                                <input
+                                                    type="number"
+                                                    step="0.01"
+                                                    value={paymentData.creditCards.collected}
+                                                    onChange={(e) => updatePaymentField('creditCards', 'collected', e.target.value)}
+                                                    className="w-full border border-gray-300 rounded px-3 py-2 text-sm"
+                                                    placeholder="0.00"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm text-gray-600 mb-1">Deposited</label>
+                                                <input
+                                                    type="number"
+                                                    step="0.01"
+                                                    value={paymentData.creditCards.deposited}
+                                                    onChange={(e) => updatePaymentField('creditCards', 'deposited', e.target.value)}
+                                                    className="w-full border border-gray-300 rounded px-3 py-2 text-sm"
+                                                    placeholder="0.00"
+                                                />
+                                            </div>
+                                            <div className={`text-sm font-medium ${paymentData.creditCards.variance === 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                                Variance: ${paymentData.creditCards.variance.toFixed(2)}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Summary Row */}
+                                <div className="bg-gray-50 rounded-lg p-4 mb-4">
+                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
+                                        <div>
+                                            <div className="text-lg font-bold text-gray-800">${getTotalCollected().toFixed(2)}</div>
+                                            <div className="text-sm text-gray-600">Total Collected</div>
+                                        </div>
+                                        <div>
+                                            <div className="text-lg font-bold text-gray-800">${getTotalDeposited().toFixed(2)}</div>
+                                            <div className="text-sm text-gray-600">Total Deposited</div>
+                                        </div>
+                                        <div>
+                                            <div className={`text-lg font-bold ${getTotalVariance() === 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                                ${getTotalVariance().toFixed(2)}
+                                            </div>
+                                            <div className="text-sm text-gray-600">Net Variance</div>
+                                        </div>
+                                        <div>
+                                            <div className={`text-lg font-bold ${Math.abs(getTotalVariance()) <= 5 ? 'text-green-600' : 'text-red-600'}`}>
+                                                {Math.abs(getTotalVariance()) <= 5 ? '? OK' : '? Review'}
+                                            </div>
+                                            <div className="text-sm text-gray-600">Status</div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Notes */}
+                                <div className="mb-4">
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                        Deposit Notes (optional)
+                                    </label>
+                                    <textarea
+                                        value={paymentData.notes}
+                                        onChange={(e) => setPaymentData(prev => ({...prev, notes: e.target.value}))}
+                                        className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                                        rows="2"
+                                        placeholder="Notes about deposits, variances, or special circumstances..."
+                                    />
+                                </div>
+
+                                <button
+                                    onClick={() => setShowPaymentTracking(false)}
+                                    className="bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700"
+                                >
+                                    Save Payment Data
+                                </button>
+                            </div>
+                        )}
+                        {/* Settings Panel */}
+                        {showSettings && (
+                            <div className="bg-white rounded-xl shadow-lg p-6 mb-8">
+                                <h3 className="text-xl font-bold text-gray-800 mb-4">System Settings</h3>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                                            Low Rate Threshold ($)
+                                        </label>
+                                        <input
+                                            type="number"
+                                            value={settings.lowRateThreshold}
+                                            onChange={(e) => setSettings(prev => ({...prev, lowRateThreshold: parseFloat(e.target.value)}))}
+                                            className="w-full border border-gray-300 rounded-md px-3 py-2"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                                            High Balance Threshold ($)
+                                        </label>
+                                        <input
+                                            type="number"
+                                            value={settings.highBalanceThreshold}
+                                            onChange={(e) => setSettings(prev => ({...prev, highBalanceThreshold: parseFloat(e.target.value)}))}
+                                            className="w-full border border-gray-300 rounded-md px-3 py-2"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                                            State Tax Rate (%)
+                                        </label>
+                                        <input
+                                            type="number"
+                                            step="0.001"
+                                            value={settings.stateTaxRate}
+                                            onChange={(e) => setSettings(prev => ({...prev, stateTaxRate: parseFloat(e.target.value)}))}
+                                            className="w-full border border-gray-300 rounded-md px-3 py-2"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                                            Occupancy Tax Rate (%)
+                                        </label>
+                                        <input
+                                            type="number"
+                                            step="0.001"
+                                            value={settings.occupancyTaxRate}
+                                            onChange={(e) => setSettings(prev => ({...prev, occupancyTaxRate: parseFloat(e.target.value)}))}
+                                            className="w-full border border-gray-300 rounded-md px-3 py-2"
+                                        />
+                                    </div>
+                                </div>
+                                <button
+                                    onClick={() => {
+                                        saveSettings();
+                                        setShowSettings(false);
+                                    }}
+                                    className="mt-4 bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700"
+                                >
+                                    Save Settings
+                                </button>
+                            </div>
+                        )}
+
+                        {/* Main Upload Interface */}
+                        {!auditReview && (
+                            <div className="bg-white rounded-xl shadow-lg p-8 mb-8">
+                                <h2 className="text-2xl font-bold text-gray-800 mb-6">Upload Night Audit Reports</h2>
+                                <p className="text-gray-600 mb-4">
+                                    Supports {propertyInfo.brand} and all major hotel management systems
+                                </p>
+                                
+                                <div className="border-2 border-dashed border-gray-300 rounded-lg p-12 text-center hover:border-blue-400 transition-all duration-300 bg-gray-50 hover:bg-blue-50">
+                                    <Upload className="mx-auto text-gray-400 mb-4" size={64} />
+                                    <h3 className="text-xl font-semibold text-gray-700 mb-2">Drop your night audit PDFs here</h3>
+                                    <p className="text-gray-500 mb-6">Manager Flash, AR Aging, Credit Card Reconciliation, Guest Ledger, etc.</p>
+                                    
+                                    <input
+                                        ref={fileInputRef}
+                                        type="file"
+                                        multiple
+                                        accept=".pdf"
+                                        onChange={handleFileUpload}
+                                        className="hidden"
+                                    />
+                                    
+                                    <button
+                                        onClick={() => fileInputRef.current?.click()}
+                                        className="bg-blue-600 text-white px-8 py-3 rounded-lg hover:bg-blue-700 transition-colors font-semibold"
+                                    >
+                                        Select Reports
+                                    </button>
+                                </div>
+
+                                {uploadedFiles.length > 0 && (
+                                    <div className="mt-8">
+                                        <h3 className="text-lg font-semibold text-gray-800 mb-4">
+                                            Uploaded Reports ({uploadedFiles.length})
+                                        </h3>
+                                        <div className="space-y-3">
+                                            {uploadedFiles.map((file) => (
+                                                <div key={file.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg border">
+                                                    <div className="flex items-center space-x-3">
+                                                        <FileText className="text-red-600" size={20} />
+                                                        <div>
+                                                            <p className="font-medium text-gray-800">{file.name}</p>
+                                                            <p className="text-sm text-gray-600">{file.type}</p>
+                                                        </div>
+                                                    </div>
+                                                    <CheckCircle className="text-green-600" size={20} />
+                                                </div>
+                                            ))}
+                                        </div>
+                                        
+                                        <button
+                                            onClick={analyzeAuditReports}
+                                            disabled={isAnalyzing}
+                                            className="mt-6 w-full bg-green-600 text-white py-4 rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors font-semibold text-lg flex items-center justify-center space-x-2"
+                                        >
+                                            {isAnalyzing ? (
+                                                <>
+                                                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                                                    <span>Analyzing Night Audit...</span>
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <Brain size={20} />
+                                                    <span>Generate Intelligence Report</span>
+                                                </>
+                                            )}
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {/* Analysis Results */}
+                        {auditReview && (
+                            <div className="space-y-8">
+                                {/* Critical Checklist */}
+                                <div className="bg-white rounded-xl shadow-lg overflow-hidden">
+                                    <div className="bg-gradient-to-r from-red-600 to-orange-600 text-white p-6">
+                                        <h2 className="text-2xl font-bold">?? Critical GM Morning Checklist</h2>
+                                        <p className="text-red-100">Essential daily review items</p>
+                                    </div>
+                                    
+                                    <div className="p-6">
+                                        <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
+                                            {[
+                                                { label: 'Low Rate Rooms', count: auditReview.criticalChecks.lowRateRoomsCount },
+                                                { label: 'Refunds', count: auditReview.criticalChecks.refundsCount },
+                                                { label: 'Adjustments', count: auditReview.criticalChecks.adjustmentsCount },
+                                                { label: 'Tax Variances', count: auditReview.criticalChecks.taxVariancesCount },
+                                                { label: 'Open Folios', count: auditReview.criticalChecks.openFoliosCount },
+                                                { label: 'High Balances', count: auditReview.criticalChecks.highBalanceGuestsCount }
+                                            ].map((item, index) => (
+                                                <div key={index} className={`text-center p-4 rounded-lg ${item.count > 0 ? 'bg-red-100 border border-red-300' : 'bg-green-100 border border-green-300'}`}>
+                                                    <div className={`text-2xl font-bold ${item.count > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                                                        {item.count}
+                                                    </div>
+                                                    <div className="text-sm text-gray-600">{item.label}</div>
+                                                    <div className={`text-xs mt-1 ${item.count > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                                                        {item.count > 0 ? '? Review' : '? Clear'}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Performance Dashboard */}
+                                <div className="bg-white rounded-xl shadow-lg p-6">
+                                    <div className="flex justify-between items-center mb-6">
+                                        <h3 className="text-xl font-bold text-gray-800">Performance Dashboard</h3>
+                                        <button
+                                            onClick={exportReport}
+                                            className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 flex items-center space-x-2"
+                                        >
+                                            <Download size={16} />
+                                            <span>Export Report</span>
+                                        </button>
+                                    </div>
+                                    
+                                    <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                                        <div className="text-center p-4 bg-blue-50 rounded-lg">
+                                            <div className="text-2xl font-bold text-blue-600">{auditReview.summary.occupancyRate}%</div>
+                                            <div className="text-sm text-gray-600">Occupancy</div>
+                                        </div>
+                                        <div className="text-center p-4 bg-green-50 rounded-lg">
+                                            <div className="text-2xl font-bold text-green-600">${auditReview.summary.adr}</div>
+                                            <div className="text-sm text-gray-600">ADR</div>
+                                        </div>
+                                        <div className="text-center p-4 bg-purple-50 rounded-lg">
+                                            <div className="text-2xl font-bold text-purple-600">${auditReview.summary.revPAR}</div>
+                                            <div className="text-sm text-gray-600">RevPAR</div>
+                                        </div>
+                                        <div className="text-center p-4 bg-orange-50 rounded-lg">
+                                            <div className="text-2xl font-bold text-orange-600">${auditReview.summary.totalRevenue}</div>
+                                            <div className="text-sm text-gray-600">Total Revenue</div>
+                                        </div>
+                                        <div className="text-center p-4 bg-indigo-50 rounded-lg">
+                                            <div className="text-2xl font-bold text-indigo-600">{auditReview.summary.roomsOccupied}/{auditReview.summary.totalRooms}</div>
+                                            <div className="text-sm text-gray-600">Rooms</div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Issues and Achievements */}
+                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                                    {/* Issues */}
+                                    <div className="bg-white rounded-xl shadow-lg p-6">
+                                        <h3 className="text-xl font-bold text-gray-800 mb-4 flex items-center">
+                                            <AlertTriangle className="text-red-600 mr-2" size={24} />
+                                            Issues Requiring Attention
+                                        </h3>
+                                        {auditReview.issues.length > 0 ? (
+                                            <div className="space-y-4">
+                                                {auditReview.issues.map((issue, index) => (
+                                                    <div key={index} className="border-l-4 border-red-500 bg-red-50 p-4 rounded-r-lg">
+                                                        <div className="flex justify-between items-start mb-2">
+                                                            <h4 className="font-semibold text-red-800">{issue.issue}</h4>
+                                                            <span className="text-xs bg-red-200 text-red-800 px-2 py-1 rounded-full">
+                                                                {issue.severity.toUpperCase()}
+                                                            </span>
+                                                        </div>
+                                                        <p className="text-red-700 text-sm mb-2">{issue.detail}</p>
+                                                        <p className="text-red-600 text-sm font-medium">Action: {issue.action}</p>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        ) : (
+                                            <div className="text-center py-8 text-green-600">
+                                                <CheckCircle className="mx-auto mb-2" size={48} />
+                                                <p className="font-semibold">No critical issues detected!</p>
+                                                <p className="text-sm text-gray-600">All systems operating normally</p>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {/* Achievements */}
+                                    <div className="bg-white rounded-xl shadow-lg p-6">
+                                        <h3 className="text-xl font-bold text-gray-800 mb-4 flex items-center">
+                                            <Star className="text-yellow-500 mr-2" size={24} />
+                                            Achievements
+                                        </h3>
+                                        {auditReview.achievements.length > 0 ? (
+                                            <div className="space-y-3">
+                                                {auditReview.achievements.map((achievement, index) => (
+                                                    <div key={index} className="flex items-center p-3 bg-green-50 rounded-lg border border-green-200">
+                                                        <CheckCircle className="text-green-600 mr-3 flex-shrink-0" size={20} />
+                                                        <span className="text-green-800">{achievement}</span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        ) : (
+                                            <p className="text-gray-500 text-center py-8">No specific achievements to highlight today</p>
+                                        )}
+                                    </div>
+                                </div>
+
+                                {/* Recommendations */}
+                                <div className="bg-white rounded-xl shadow-lg p-6">
+                                    <h3 className="text-xl font-bold text-gray-800 mb-4">GM Recommendations</h3>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        {auditReview.recommendations.map((rec, index) => (
+                                            <div key={index} className="flex items-start p-4 bg-blue-50 rounded-lg border border-blue-200">
+                                                <div className="bg-blue-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-sm font-bold mr-3 mt-0.5 flex-shrink-0">
+                                                    {index + 1}
+                                                </div>
+                                                <span className="text-blue-800">{rec}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                {/* Tax Analysis */}
+                                <div className="bg-white rounded-xl shadow-lg p-6">
+                                    <h3 className="text-xl font-bold text-gray-800 mb-4 flex items-center">
+                                        <DollarSign className="text-green-600 mr-2" size={24} />
+                                        Tax Analysis
+                                    </h3>
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                        <div className="text-center p-4 bg-gray-50 rounded-lg">
+                                            <div className="text-lg font-bold text-gray-800">${auditReview.taxAnalysis.roomRevenue}</div>
+                                            <div className="text-sm text-gray-600">Room Revenue</div>
+                                        </div>
+                                        <div className="text-center p-4 bg-blue-50 rounded-lg">
+                                            <div className="text-lg font-bold text-blue-600">${auditReview.taxAnalysis.expectedStateTax}</div>
+                                            <div className="text-sm text-gray-600">Expected State Tax ({settings.stateTaxRate}%)</div>
+                                        </div>
+                                        <div className="text-center p-4 bg-purple-50 rounded-lg">
+                                            <div className="text-lg font-bold text-purple-600">${auditReview.taxAnalysis.expectedOccupancyTax}</div>
+                                            <div className="text-sm text-gray-600">Expected Occupancy Tax ({settings.occupancyTaxRate}%)</div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Action Buttons */}
+                                <div className="flex space-x-4">
+                                    <button
+                                        onClick={() => {
+                                            setAuditReview(null);
+                                            setUploadedFiles([]);
+                                        }}
+                                        className="flex-1 bg-gray-600 text-white py-3 rounded-lg hover:bg-gray-700 transition-colors font-semibold"
+                                    >
+                                        Start New Analysis
+                                    </button>
+                                    <button
+                                        onClick={exportReport}
+                                        className="flex-1 bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 transition-colors font-semibold flex items-center justify-center space-x-2"
+                                    >
+                                        <Download size={20} />
+                                        <span>Export Full Report</span>
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        ReactDOM.render(<HelloGM />, document.getElementById('root'));
+    </script>
+</body>
+</html>
